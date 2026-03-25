@@ -1,5 +1,15 @@
-### DU-GAN
-This repository contains the PyTorch implementation of the paper: **DU-GAN: Generative Adversarial Networks with Dual-Domain U-Net Based Discriminators for Low-Dose CT Denoising** accepted by IEEE Transactions on Instrumentation & Measurement 2021.
+### LDCT Denoising Branch
+This repository is my working branch for **low-dose CT (LDCT) denoising** based on **DU-GAN**.
+
+Current focus:
+- paired **low-dose CT -> full-dose CT** training
+- extending DU-GAN with an extra **Noise Discriminator**
+- exploring **MoE / gating** on top of the original image and gradient discriminators
+
+This repo is intentionally focused on the **LDCT-only** setting first. Cross-modality experiments are not the current priority.
+
+### Upstream DU-GAN
+This codebase started from the PyTorch implementation of the paper: **DU-GAN: Generative Adversarial Networks with Dual-Domain U-Net Based Discriminators for Low-Dose CT Denoising** accepted by IEEE Transactions on Instrumentation & Measurement 2021.
 
 > DU-GAN: Generative Adversarial Networks with Dual-Domain U-Net Based Discriminators for Low-Dose CT Denoising<br>
 > https://arxiv.org/abs/2108.10772 <br>

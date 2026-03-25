@@ -5,7 +5,7 @@ import time
 from torchvision.utils import save_image
 import torch.distributed as dist
 import inspect
-from utils.ops import reduce_tensor, load_network
+from dugan_utils.ops import reduce_tensor, load_network
 
 
 def get_varname(var):
@@ -58,7 +58,12 @@ class LoggerX(object):
         for i in range(len(self.modules)):
             module_name = self.module_names[i]
             module = self.modules[i]
-            module.load_state_dict(load_network(osp.join(self.models_save_dir, '{}-{}'.format(module_name, epoch))))
+            path = osp.join(self.models_save_dir, '{}-{}'.format(module_name, epoch))
+            if osp.exists(path):
+                module.load_state_dict(load_network(path))
+            else:
+                if self.local_rank == 0:
+                    print('Warning: Checkpoint for {} not found at {}. Skipping.'.format(module_name, path))
 
     def msg(self, stats, step):
         output_str = '[{}] {:05d}, '.format(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), step)

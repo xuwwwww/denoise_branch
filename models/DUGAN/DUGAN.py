@@ -8,18 +8,12 @@ import tqdm
 import torch.nn as nn
 
 from models.basic_template import TrainTask
-from utils.grad_loss import SobelOperator
-from .DUGAN_wrapper import UNet
+from dugan_utils.grad_loss import SobelOperator
+# from .DUGAN_wrapper import UNet # Removed for dynamic import
 from models.REDCNN.REDCNN_wrapper import Generator
-from utils.gan_loss import ls_gan
-from utils.ops import turn_on_spectral_norm
-from utils.metrics import compute_ssim, compute_psnr, compute_rmse
-
-'''
-python main.py --batch_size=64 --cr_loss_weight=5.08720932695335 --cutmix_prob=0.7615524094697519 --cutmix_warmup_iter=1000 --d_lr=7.122979672016055e-05 --g_lr=0.00018083340390609657 --grad_gen_loss_weight=0.11960717521104237 --grad_loss_weight=35.310016043755894 --img_gen_loss_weight=0.14178356036938378 --max_iter=50000 --model_name=UnetGAN --num_channels=32 --num_layers=10 --num_workers=32 --pix_loss_weight=5.034293425614828 --print_freq=10 --run_name=newest --save_freq=2500 --test_batch_size=8 --test_dataset_name=lmayo_test_512 --train_dataset_name=lmayo_train_64 --use_grad_discriminator=true --weight_decay 0. --num_workers 4
-python main.py --batch_size=64 --cr_loss_weight=5.08720932695335 --cutmix_prob=0.7615524094697519 --cutmix_warmup_iter=1000 --d_lr=7.122979672016055e-05 --g_lr=0.00018083340390609657 --grad_gen_loss_weight=0.11960717521104237 --grad_loss_weight=35.310016043755894 --img_gen_loss_weight=0.14178356036938378 --max_iter=100000 --model_name=UnetGAN --num_channels=32 --num_layers=10 --num_workers=32 --pix_loss_weight=5.034293425614828 --print_freq=10 --run_name=newest --save_freq=2500 --test_batch_size=8 --test_dataset_name=cmayo_test_512 --train_dataset_name=cmayo_train_64 --use_grad_discriminator=true --weight_decay 0. --num_workers 4
-'''
-
+from dugan_utils.gan_loss import ls_gan
+from dugan_utils.ops import turn_on_spectral_norm
+from dugan_utils.metrics import compute_ssim, compute_psnr, compute_rmse
 
 class DUGAN(TrainTask):
 
@@ -42,6 +36,8 @@ class DUGAN(TrainTask):
         parser.add_argument("--use_grad_discriminator", help='use_grad_discriminator', type=bool, default=True)
         parser.add_argument("--moving_average", default=0.999, type=float)
         parser.add_argument("--repeat_num", default=6, type=int)
+        parser.add_argument("--use_hybrid_wrapper", action='store_true', help='Use hybrid attention wrapper')
+        
         return parser
 
     def set_model(self):
@@ -51,7 +47,39 @@ class DUGAN(TrainTask):
         g_optimizer = torch.optim.Adam(generator.parameters(), opt.g_lr, weight_decay=opt.weight_decay)
 
         self.gan_metric = ls_gan
+        
+        # Conditional Import for Hybrid Wrapper
+                # Dynamic Wrapper Selection for Discriminator
+        run_name_lower = opt.run_name.lower()
+        wrapper_name = "models.DUGAN.DUGAN_wrapper_1128_Original" # Default
+        
+        if "hybrid" in run_name_lower:
+            wrapper_name = "models.DUGAN.DUGAN_wrapper_1205_hybrid"
+        elif "cbam" in run_name_lower:
+            wrapper_name = "models.DUGAN.DUGAN_wrapper_1201_cbam"
+        elif "frequency" in run_name_lower:
+            wrapper_name = "models.DUGAN.DUGAN_wrapper_1125_Frequency_Attention"
+        elif "wavelet" in run_name_lower:
+            wrapper_name = "models.DUGAN.DUGAN_wrapper_1129_wavelet_ca_v1"
+        elif "moe" in run_name_lower:
+            wrapper_name = "models.DUGAN.DUGAN_wrapper_1201_cbam" # MoE uses CBAM wrapper
+        elif "original" in run_name_lower:
+            wrapper_name = "models.DUGAN.DUGAN_wrapper_1128_Original"
+            
+        print(f"Dynamic Wrapper Selection (Discriminator): {opt.run_name} -> {wrapper_name}")
+            
+        import importlib
+        try:
+            module = importlib.import_module(wrapper_name)
+            UNet = module.UNet
+        except ImportError as e:
+            print(f"Error importing {wrapper_name}: {e}")
+            print("Falling back to models.DUGAN.DUGAN_wrapper_1128_Original")
+            import models.DUGAN.DUGAN_wrapper_1128_Original as fallback
+            UNet = fallback.UNet
+
         img_discriminator = UNet(repeat_num=opt.repeat_num, use_discriminator=True, conv_dim=64, use_sigmoid=False)
+            
         img_discriminator = turn_on_spectral_norm(img_discriminator)
         img_d_optimizer = torch.optim.Adam(img_discriminator.parameters(), opt.d_lr)
         grad_discriminator = copy.deepcopy(img_discriminator)
@@ -68,10 +96,9 @@ class DUGAN(TrainTask):
         self.img_discriminator = img_discriminator.cuda()
         self.img_d_optimizer = img_d_optimizer
         self.grad_discriminator = grad_discriminator.cuda()
+        self.grad_d_optimizer = grad_d_optimizer
 
         self.ema_generator = ema_generator.cuda()
-
-        self.grad_d_optimizer = grad_d_optimizer
         self.apply_cutmix_prob = torch.rand(opt.max_iter)
 
     def train_discriminator(self, discriminator, d_optimizer,
@@ -141,36 +168,30 @@ class DUGAN(TrainTask):
         self.generator.train()
         self.img_discriminator.train()
         self.grad_discriminator.train()
-        msg_dict = {}
 
         gen_full_dose = self.generator(low_dose)
         grad_gen_full_dose = self.sobel(gen_full_dose)
         grad_low_dose = self.sobel(low_dose)
         grad_full_dose = self.sobel(full_dose)
+
         self.train_discriminator(self.img_discriminator, self.img_d_optimizer,
                                  full_dose, low_dose, gen_full_dose, prefix='img', n_iter=n_iter)
 
         if n_iter % opt.d_iter == 0:
             ############## Train Generator ###################
+            self.g_optimizer.zero_grad()
 
             ########### GAN Loss ############
-            self.g_optimizer.zero_grad()
             img_gen_enc, img_gen_dec = self.img_discriminator(gen_full_dose)
             img_gen_loss = self.gan_metric(img_gen_enc, 1.) + self.gan_metric(img_gen_dec, 1.)
 
-            total_loss = 0.
+            grad_gen_loss = 0.
             if opt.use_grad_discriminator:
                 self.train_discriminator(self.grad_discriminator, self.grad_d_optimizer,
                                          grad_full_dose, grad_low_dose, grad_gen_full_dose, prefix='grad',
                                          n_iter=n_iter)
                 grad_gen_enc, grad_gen_dec = self.grad_discriminator(grad_gen_full_dose)
                 grad_gen_loss = self.gan_metric(grad_gen_enc, 1.) + self.gan_metric(grad_gen_dec, 1.)
-                total_loss = grad_gen_loss * opt.grad_gen_loss_weight
-                msg_dict.update({
-                    'enc/grad_gen_enc': grad_gen_enc,
-                    'dec/grad_gen_dec': grad_gen_dec,
-                    'loss/grad_gen_loss': grad_gen_loss,
-                })
 
             ########### Pixel Loss ############
             pix_loss = F.mse_loss(gen_full_dose, full_dose)
@@ -181,32 +202,36 @@ class DUGAN(TrainTask):
             ########### Grad Loss ############
             grad_loss = F.l1_loss(grad_gen_full_dose, grad_full_dose)
 
-            total_loss += img_gen_loss * opt.img_gen_loss_weight + \
-                          pix_loss * opt.pix_loss_weight + \
-                          grad_loss * opt.grad_loss_weight
+            total_loss = img_gen_loss * opt.img_gen_loss_weight + \
+                         pix_loss * opt.pix_loss_weight + \
+                         grad_loss * opt.grad_loss_weight
+
+            if opt.use_grad_discriminator:
+                total_loss += grad_gen_loss * opt.grad_gen_loss_weight
 
             total_loss.backward()
 
             self.g_optimizer.step()
-            msg_dict.update({
+            self.logger.msg({
                 'enc/img_gen_enc': img_gen_enc,
                 'dec/img_gen_dec': img_gen_dec,
+                'enc/grad_gen_enc': grad_gen_enc,
+                'dec/grad_gen_dec': grad_gen_dec,
                 'loss/img_gen_loss': img_gen_loss,
+                'loss/grad_gen_loss': grad_gen_loss,
                 'loss/pix': pix_loss,
                 'loss/l1': l1_loss,
                 'loss/grad': grad_loss,
-            })
-            self.logger.msg(msg_dict, n_iter)
+            }, n_iter)
 
     @torch.no_grad()
     def generate_images(self, n_iter):
         self.generator.eval()
         low_dose, full_dose = self.test_images
         bs, ch, w, h = low_dose.size()
-        gen_full_dose = self.generator(low_dose).clamp(0., 1.)
-        fake_imgs = [low_dose, full_dose, gen_full_dose,
-                     self.img_discriminator(gen_full_dose)[1].clamp(0., 1.),
-                     self.grad_discriminator(self.sobel(gen_full_dose))[1].clamp(0., 1.)]
+        fake_imgs = [low_dose, full_dose, self.generator(low_dose).clamp(0., 1.),
+                     self.img_discriminator(self.generator(low_dose).clamp(0., 1.))[1].clamp(0., 1.),
+                     self.grad_discriminator(self.sobel(self.generator(low_dose).clamp(0., 1.)))[1].clamp(0., 1.)]
         fake_imgs = torch.stack(fake_imgs).transpose(1, 0).reshape((-1, ch, w, h))
         self.logger.save_image(torchvision.utils.make_grid(fake_imgs, nrow=5), n_iter, 'test')
 

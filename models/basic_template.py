@@ -6,10 +6,10 @@ import tqdm
 import argparse
 import torch.distributed as dist
 
-from utils.dataset import dataset_dict
-from utils.metrics import compute_ssim, compute_psnr, compute_rmse
-from utils.loggerx import LoggerX
-from utils.sampler import RandomSampler
+from dugan_utils.dataset import dataset_dict
+from dugan_utils.metrics import compute_ssim, compute_psnr, compute_rmse
+from dugan_utils.loggerx import LoggerX
+from dugan_utils.sampler import RandomSampler
 
 
 class TrainTask(object):
