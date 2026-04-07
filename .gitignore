@@ -19,6 +19,8 @@ denoise.tar.gz
 # Training outputs
 output/
 visualization/
+logs/
+*.log
 *.pth
 *.pt
 *.ckpt
