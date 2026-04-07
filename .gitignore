@@ -1,2 +1,29 @@
 .DS_Store
 .idea
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Notebook / IDE temp files
+.ipynb_checkpoints/
+
+# Local datasets and archives
+dataset/**/*.npy
+dataset/cmayo_appendix/
+denoise.tar.gz
+*.tar
+*.tar.gz
+*.zip
+
+# Training outputs
+output/
+visualization/
+logs/
+*.log
+*.pth
+*.pt
+*.ckpt
+
+# OS files
+Thumbs.db
