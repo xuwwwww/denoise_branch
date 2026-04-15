@@ -1,10 +1,15 @@
-import torch.utils.data
-import torch
-import torchvision
-import os.path as osp
-import tqdm
 import argparse
+import json
+import os
+import os.path as osp
+import subprocess
+import sys
+
+import torch
 import torch.distributed as dist
+import torch.utils.data
+import torchvision
+import tqdm
 
 from dugan_utils.dataset import dataset_dict
 from dugan_utils.metrics import compute_ssim, compute_psnr, compute_rmse
@@ -16,12 +21,46 @@ class TrainTask(object):
 
     def __init__(self, opt):
         self.opt = opt
-        self.logger = LoggerX(save_root=osp.join(
-            osp.dirname(osp.dirname(osp.abspath(__file__))), 'output', '{}_{}'.format(opt.model_name, opt.run_name)))
+        self.save_root = osp.join(
+            osp.dirname(osp.dirname(osp.abspath(__file__))), 'output', '{}_{}'.format(opt.model_name, opt.run_name))
+        self.logger = LoggerX(save_root=self.save_root)
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.generator = None
+        self._write_run_metadata()
         self.set_loader()
         self.set_model()
+
+    def _safe_git(self, *args):
+        try:
+            return subprocess.check_output(
+                ['git', *args],
+                cwd=osp.dirname(osp.dirname(osp.abspath(__file__))),
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            return None
+
+    def _write_run_metadata(self):
+        if self.rank != 0:
+            return
+
+        metadata = {
+            'argv': sys.argv,
+            'cwd': os.getcwd(),
+            'model_name': self.opt.model_name,
+            'run_name': self.opt.run_name,
+            'train_dataset_name': self.opt.train_dataset_name,
+            'test_dataset_name': self.opt.test_dataset_name,
+            'git_commit': self._safe_git('rev-parse', 'HEAD'),
+            'git_branch': self._safe_git('rev-parse', '--abbrev-ref', 'HEAD'),
+            'git_status_short': self._safe_git('status', '--short'),
+            'options': vars(self.opt),
+        }
+
+        metadata_path = osp.join(self.save_root, 'run_metadata.json')
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
 
     @staticmethod
     def build_default_options():
@@ -140,8 +179,6 @@ class TrainTask(object):
         self.logger.msg([psnr, ssim, rmse], n_iter)
 
     def adjust_learning_rate(self, n_iter):
-        opt = self.opt
-
         pass
 
     @torch.no_grad()
