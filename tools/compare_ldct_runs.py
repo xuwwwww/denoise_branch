@@ -1,4 +1,5 @@
 import argparse
+import gc
 import os
 
 import numpy as np
@@ -32,6 +33,7 @@ def build_model(model_name: str, run_name: str, resume_iter: int, moe_phase: int
     default_opt.test_dataset_name = 'cmayo_test_512'
     default_opt.batch_size = 1
     default_opt.test_batch_size = 1
+    default_opt.num_workers = 0
 
     model_cls = model_dict[model_name]
     private_parser = model_cls.build_options()
@@ -78,50 +80,58 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    baseline = build_model(args.baseline_model, args.baseline_run, args.baseline_iter, moe_phase=0)
-    candidate = build_model(
-        args.candidate_model,
-        args.candidate_run,
-        args.candidate_iter,
-        moe_phase=args.candidate_moe_phase,
-    )
-
     summary_lines = [
         f'baseline={args.baseline_model}:{args.baseline_run}:{args.baseline_iter}',
         f'candidate={args.candidate_model}:{args.candidate_run}:{args.candidate_iter}:phase{args.candidate_moe_phase}',
         '',
     ]
 
-    baseline_iter = iter(baseline.test_loader)
-    candidate_iter = iter(candidate.test_loader)
-
+    baseline_data = []
+    baseline = build_model(args.baseline_model, args.baseline_run, args.baseline_iter, moe_phase=0)
     with torch.no_grad():
+        baseline_iter = iter(baseline.test_loader)
         for idx in range(args.num_samples):
             low_b, full_b = next(baseline_iter)
-            low_c, full_c = next(candidate_iter)
-
             low_b = low_b.cuda()
             full_b = full_b.cuda()
-            low_c = low_c.cuda()
-            full_c = full_c.cuda()
 
             base_pred = baseline.generator(low_b).clamp(0.0, 1.0)
-            cand_pred = candidate.generator(low_c).clamp(0.0, 1.0)
-
             base_metrics = tensor_metrics(base_pred, full_b)
-            cand_metrics = tensor_metrics(cand_pred, full_c)
-
             base_residual = torch.abs(low_b - base_pred)
-            cand_residual = torch.abs(low_c - cand_pred)
             gt_residual = torch.abs(low_b - full_b)
 
             prefix = os.path.join(args.output_dir, f'sample_{idx}')
             save_single_image(low_b[0, 0], f'{prefix}_input.png')
             save_single_image(full_b[0, 0], f'{prefix}_gt.png')
             save_single_image(base_pred[0, 0], f'{prefix}_baseline.png')
-            save_single_image(cand_pred[0, 0], f'{prefix}_candidate.png')
             save_single_image(normalize_to_01(gt_residual[0, 0]), f'{prefix}_gt_residual.png')
             save_single_image(normalize_to_01(base_residual[0, 0]), f'{prefix}_baseline_residual.png')
+
+            baseline_data.append(base_metrics)
+
+    del baseline
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    candidate = build_model(
+        args.candidate_model,
+        args.candidate_run,
+        args.candidate_iter,
+        moe_phase=args.candidate_moe_phase,
+    )
+    with torch.no_grad():
+        candidate_iter = iter(candidate.test_loader)
+        for idx in range(args.num_samples):
+            low_c, full_c = next(candidate_iter)
+            low_c = low_c.cuda()
+            full_c = full_c.cuda()
+
+            cand_pred = candidate.generator(low_c).clamp(0.0, 1.0)
+            cand_metrics = tensor_metrics(cand_pred, full_c)
+            cand_residual = torch.abs(low_c - cand_pred)
+
+            prefix = os.path.join(args.output_dir, f'sample_{idx}')
+            save_single_image(cand_pred[0, 0], f'{prefix}_candidate.png')
             save_single_image(normalize_to_01(cand_residual[0, 0]), f'{prefix}_candidate_residual.png')
 
             if hasattr(candidate, 'noise_discriminator'):
@@ -133,9 +143,13 @@ def main():
 
             summary_lines.append(
                 f'sample_{idx}: '
-                f'baseline(ssim={base_metrics["ssim"]:.5f}, psnr={base_metrics["psnr"]:.5f}, rmse={base_metrics["rmse"]:.5f}) | '
+                f'baseline(ssim={baseline_data[idx]["ssim"]:.5f}, psnr={baseline_data[idx]["psnr"]:.5f}, rmse={baseline_data[idx]["rmse"]:.5f}) | '
                 f'candidate(ssim={cand_metrics["ssim"]:.5f}, psnr={cand_metrics["psnr"]:.5f}, rmse={cand_metrics["rmse"]:.5f})'
             )
+
+    del candidate
+    torch.cuda.empty_cache()
+    gc.collect()
 
     save_text(os.path.join(args.output_dir, 'summary.txt'), '\n'.join(summary_lines) + '\n')
     print(f'Comparison saved to {args.output_dir}')
