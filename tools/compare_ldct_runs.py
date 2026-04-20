@@ -25,7 +25,7 @@ def save_single_image(tensor: torch.Tensor, path: str) -> None:
 
 def build_model(model_name: str, run_name: str, resume_iter: int, moe_phase: int = 0):
     default_parser = TrainTask.build_default_options()
-    default_opt, unknown_opt = default_parser.parse_known_args()
+    default_opt = default_parser.parse_args([])
     default_opt.model_name = model_name
     default_opt.run_name = run_name
     default_opt.resume_iter = resume_iter
@@ -35,7 +35,7 @@ def build_model(model_name: str, run_name: str, resume_iter: int, moe_phase: int
 
     model_cls = model_dict[model_name]
     private_parser = model_cls.build_options()
-    opt = private_parser.parse_args(unknown_opt, namespace=default_opt)
+    opt = private_parser.parse_args([], namespace=default_opt)
     opt.isTrain = False
     if hasattr(opt, 'moe_phase'):
         opt.moe_phase = moe_phase
