@@ -40,7 +40,7 @@ python dataset/gen_data.py
 ```
 
 #### Training
-Here we provide both RED-CNN and our DU-GAN implementation. Run the following code:
+This repository includes RED-CNN and a DU-GAN-based implementation. Run the following code:
 ```shell
 sh train_redcnn.sh
 ```
@@ -63,7 +63,7 @@ pydicom
 
 ### Citation
 
-If you found this code or our work useful please cite us:
+If this repository or the upstream DU-GAN method is useful in your work, please cite the original DU-GAN paper:
 
 ```
 @article{huang2020dugan,
