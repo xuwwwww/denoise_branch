@@ -1,6 +1,10 @@
 ### LDCT Denoising Branch
 This repository is my working branch for **low-dose CT (LDCT) denoising** based on **DU-GAN**.
 
+> **Authorship notice**  
+> I am **not** the original author of DU-GAN.  
+> This repository is an independent research/reproduction branch built on top of the published DU-GAN paper and its open-source implementation, with additional personal experiments (for example, Noise Discriminator and MoE-related ideas).
+
 Current focus:
 - paired **low-dose CT -> full-dose CT** training
 - extending DU-GAN with an extra **Noise Discriminator**
